@@ -18,17 +18,7 @@ let ws = null;
 let myId = null;
 let myKeys = null;          
 let sessionKey = null;      
-let roomId=null; 
-async function
-hashRoomPassword(password) {
-  const data=new
-TextEncoder().encode(password);
-  const hash=await
-crypto.digest("SHA-256",data);
-
-  return Array.from(new Uint8Array(hash)).map(b =>
-    b.toString(16).padStart(2, "0")) .join(" ");
-  }
+let myAvatar = null;
 const users = {};          
 const messageEls = {};      
 
@@ -241,7 +231,7 @@ $('avatarInput').addEventListener('change', async (e) => {
   $('avatarPreview').classList.toggle('hidden', !myAvatar);
 });
 
-async function connect(mode) {
+async function connect() {
   const username = $('username').value.trim();
   if (!username) { alert('pick a username first'); return; }
   const password = $('roomPassword').value.trim();
@@ -267,8 +257,7 @@ roomId = await hashRoomPassword(password);
       type: 'join', username,
       pubkey: pubKeyToJSON(myKeys.publicKey),
       avatar: myAvatar,
-      room: roomId,
-      mode: mode
+      
     };
     ws.send(JSON.stringify(joinMsg));
     showWireTraffic('→', { ...joinMsg, avatar: myAvatar ? '[image data]' : null });
@@ -389,12 +378,7 @@ function sendMessage() {
   input.value = '';
 }
 
-$('enterPasswordBtn').addEventListener('click', () => connect('enter'));
-
-$('createPasswordBtn').addEventListener('click', () => connect('create'));
-
-$('sendMessageBtn').addEventListener('click', sendMessage);
-
-$('messageInput').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') sendMessage();
-});
+$('connectBtn').addEventListener('click', connect);
+$('sendBtn').addEventListener('click', sendMessage);
+$('messageInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') sendMessage(); });
+$('username').addEventListener('keydown', (e) => { if (e.key === 'Enter') connect(); });
