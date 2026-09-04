@@ -12,15 +12,23 @@
   <p class="subtitle">RSA-1024 key exchange + AES-128-CBC messages, implemented from scratch — no crypto libraries. Calls use WebRTC.</p>
 
   <input id="username" type="text" placeholder="pick a username" autocomplete="off">
-
+  <input id="roomPassword" type="password" placeholder="Room password">
+<div> <button id="enterPasswordBtn">
+  Enter password
+</button>
+<button id="createPasswordBtn">
+  Create password
+</button></div>
+<button id="connectBtn">Connect</button>
+  <p id="status" class="status"></p>
   <label class="avatar-picker">
     <img id="avatarPreview" class="hidden" alt="avatar preview">
-    <span id="avatarPickerLabel">+ add profile picture</span>
+    
     <input id="avatarInput" type="file" accept="image/*" class="hidden">
+    <span id="avatarPickerLabel"> 😉 + add profile picture</span>
   </label>
 
-  <button id="connectBtn">Connect</button>
-  <p id="status" class="status"></p>
+  
 </div>
 
 <div id="chatScreen" class="screen hidden">
