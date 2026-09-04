@@ -241,8 +241,7 @@ async function connect() {
   myKeys = generateRSAKeyPair(1024);
 
   $('status').textContent = 'connecting...';
-  ws = new WebSocket('ws://localhost:8765');
-
+  ws = new WebSocket('wss://encrypted-chat-sx9o.onrender.com');
   ws.onopen = () => {
     const joinMsg = {
       type: 'join', username,
