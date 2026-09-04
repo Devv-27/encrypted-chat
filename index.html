@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>encrypted chat</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="loginScreen" class="screen">
+  <h1>Encrypted Chat</h1>
+  <p class="subtitle">RSA-1024 key exchange + AES-128-CBC messages, implemented from scratch — no crypto libraries. Calls use WebRTC.</p>
+
+  <input id="username" type="text" placeholder="pick a username" autocomplete="off">
+
+  <label class="avatar-picker">
+    <img id="avatarPreview" class="hidden" alt="avatar preview">
+    <span id="avatarPickerLabel">+ add profile picture</span>
+    <input id="avatarInput" type="file" accept="image/*" class="hidden">
+  </label>
+
+  <button id="connectBtn">Connect</button>
+  <p id="status" class="status"></p>
+</div>
+
+<div id="chatScreen" class="screen hidden">
+  <div class="chat-layout">
+    <aside class="sidebar">
+      <h3>Online</h3>
+      <ul id="userList"></ul>
+      <h3>Wire traffic</h3>
+      <p class="hint">what actually goes over the socket - notice it's ciphertext / key material / SDP, never plaintext chat</p>
+      <div id="wire" class="wire"></div>
+    </aside>
+
+    <main class="chat-main">
+      <div id="messages" class="messages"></div>
+      <div class="input-row">
+        <input id="messageInput" type="text" placeholder="type a message..." autocomplete="off">
+        <button id="sendBtn">Send</button>
+      </div>
+    </main>
+  </div>
+</div>
+
+<!-- incoming call popup -->
+<div id="incomingCallModal" class="modal hidden">
+  <div class="modal-box">
+    <p><strong id="incomingCallerName"></strong> is calling</p>
+    <p class="hint" id="incomingCallType"></p>
+    <div class="modal-actions">
+      <button id="acceptCallBtn" class="accept">Accept</button>
+      <button id="rejectCallBtn" class="reject">Decline</button>
+    </div>
+  </div>
+</div>
+
+<!-- active call overlay -->
+<div id="callOverlay" class="call-overlay hidden">
+  <div class="call-header">
+    <span id="callPeerName"></span> — <span id="callStatusText"></span>
+  </div>
+  <div id="videoArea" class="video-area">
+    <video id="remoteVideo" autoplay playsinline></video>
+    <video id="localVideo" autoplay playsinline muted></video>
+  </div>
+  <div class="call-controls">
+    <button id="muteBtn">Mute</button>
+    <button id="cameraBtn">Camera off</button>
+    <button id="hangupBtn" class="reject">Hang up</button>
+  </div>
+</div>
+
+<script src="rsa.js"></script>
+<script src="aes.js"></script>
+<script src="app.js"></script>
+<script src="call.js"></script>
+</body>
+</html>
