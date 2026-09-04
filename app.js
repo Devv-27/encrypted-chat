@@ -234,17 +234,7 @@ $('avatarInput').addEventListener('change', async (e) => {
 async function connect() {
   const username = $('username').value.trim();
   if (!username) { alert('pick a username first'); return; }
-  const password = $('roomPassword').value.trim();
-
-if (!password) {
-  alert('Enter a room password');
-  return;
-}
-
-roomId = await hashRoomPassword(password);
-  roomId=await
-  hashRoomPassword(password);
-
+  
   $('connectBtn').disabled = true;
   $('status').textContent = 'generating RSA-1024 keypair...';
   await new Promise(r => setTimeout(r, 30));
