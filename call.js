@@ -7,12 +7,36 @@
  * SDP offer/answer and ICE candidates between two browsers so they can
  * find each other and set up a direct connection.
  *
- * Depends on `ws` and `users` being available from app.js (loaded
- * after app.js in index.html... actually loaded before, see below -
- * we just reference the globals at call time, not at load time).
+ * Fixes vs the earlier version:
+ * - ICE candidates that arrive before the peer connection has a remote
+ *   description (very common - the caller's candidates start flowing
+ *   the instant it calls setLocalDescription, often before the callee
+ *   has even clicked Accept) are now queued and flushed once the
+ *   remote description is set, instead of being silently dropped.
+ * - call_answer now properly awaits setRemoteDescription before
+ *   flipping the UI to "active" and before applying queued candidates.
+ * - added a public STUN+TURN server pair, not just STUN, so calls can
+ *   still connect when both sides are behind strict/symmetric NATs
+ *   (STUN alone fails there).
+ *
+ * Depends on `ws` and `users` being available from app.js.
  */
 
-const ICE_SERVERS = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+const ICE_SERVERS = {
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
+    {
+      urls: 'turn:openrelay.metered.ca:80',
+      username: 'openrelayproject',
+      credential: 'openrelayproject',
+    },
+    {
+      urls: 'turn:openrelay.metered.ca:443',
+      username: 'openrelayproject',
+      credential: 'openrelayproject',
+    },
+  ],
+};
 
 let pc = null;             // RTCPeerConnection for the active/pending call
 let localStream = null;
@@ -20,6 +44,8 @@ let callPeerId = null;
 let callPeerName = null;
 let isVideoCall = false;
 let callState = 'idle';    // idle | calling | ringing | active
+let pendingOffer = null;
+let pendingIceCandidates = []; // candidates that arrived before we had a remote description
 
 function $c(id) { return document.getElementById(id); }
 
@@ -36,11 +62,21 @@ function teardownCall() {
   callPeerId = null;
   callPeerName = null;
   callState = 'idle';
+  pendingIceCandidates = [];
   resetCallUI();
 }
 
 function sendSignal(obj) {
   ws.send(JSON.stringify(obj));
+}
+
+async function flushPendingIceCandidates() {
+  if (!pc) { pendingIceCandidates = []; return; }
+  const queued = pendingIceCandidates;
+  pendingIceCandidates = [];
+  for (const candidate of queued) {
+    try { await pc.addIceCandidate(candidate); } catch (e) { /* ignore stale/invalid candidates */ }
+  }
 }
 
 function buildPeerConnection() {
@@ -96,6 +132,7 @@ async function acceptCall() {
   isVideoCall = video;
   callState = 'active';
   $c('incomingCallModal').classList.add('hidden');
+  pendingOffer = null;
 
   try {
     localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video });
@@ -109,6 +146,7 @@ async function acceptCall() {
   pc = buildPeerConnection();
   localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
   await pc.setRemoteDescription({ type: 'offer', sdp });
+  await flushPendingIceCandidates();
   const answer = await pc.createAnswer();
   await pc.setLocalDescription(answer);
   sendSignal({ type: 'call_answer', to: from, sdp: answer.sdp });
@@ -120,6 +158,7 @@ function rejectCall() {
   if (pendingOffer) sendSignal({ type: 'call_reject', to: pendingOffer.from });
   $c('incomingCallModal').classList.add('hidden');
   pendingOffer = null;
+  pendingIceCandidates = [];
 }
 
 function hangUp() {
@@ -152,8 +191,6 @@ function showCallOverlay(state, video) {
   $c('cameraBtn').classList.toggle('hidden', !video);
 }
 
-let pendingOffer = null;
-
 // called from app.js's handleMessage for call_* signal types
 function handleCallSignal(data) {
   switch (data.type) {
@@ -164,6 +201,7 @@ function handleCallSignal(data) {
         return;
       }
       pendingOffer = data;
+      pendingIceCandidates = [];
       callState = 'ringing';
       const caller = users[data.from];
       $c('incomingCallerName').textContent = caller ? caller.username : 'unknown';
@@ -173,15 +211,27 @@ function handleCallSignal(data) {
     }
     case 'call_answer': {
       if (pc && callPeerId === data.from) {
-        pc.setRemoteDescription({ type: 'answer', sdp: data.sdp });
-        callState = 'active';
-        $c('callStatusText').textContent = 'in call';
+        (async () => {
+          await pc.setRemoteDescription({ type: 'answer', sdp: data.sdp });
+          await flushPendingIceCandidates();
+          callState = 'active';
+          $c('callStatusText').textContent = 'in call';
+        })();
       }
       break;
     }
     case 'call_ice': {
-      if (pc && callPeerId === data.from && data.candidate) {
+      if (!data.candidate) break;
+      // is this candidate relevant to the call we're setting up / in?
+      const relevant = (callPeerId === data.from) || (pendingOffer && pendingOffer.from === data.from);
+      if (!relevant) break;
+
+      if (pc && pc.remoteDescription) {
         pc.addIceCandidate(data.candidate).catch(() => {});
+      } else {
+        // remote description isn't set yet (still ringing, or the offer
+        // hasn't been processed) - hold onto it and apply it once it is
+        pendingIceCandidates.push(data.candidate);
       }
       break;
     }
@@ -199,6 +249,7 @@ function handleCallSignal(data) {
       } else if (pendingOffer && pendingOffer.from === data.from) {
         $c('incomingCallModal').classList.add('hidden');
         pendingOffer = null;
+        pendingIceCandidates = [];
         callState = 'idle';
       }
       break;

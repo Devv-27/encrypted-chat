@@ -6,41 +6,48 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-
 <div id="loginScreen" class="screen">
   <h1>Encrypted Chat</h1>
   <p class="subtitle">RSA-1024 key exchange + AES-128-CBC messages, implemented from scratch — no crypto libraries. Calls use WebRTC.</p>
 
   <input id="username" type="text" placeholder="pick a username" autocomplete="off">
-  <input id="roomPassword" type="password" placeholder="Room password">
-<div> <button id="enterPasswordBtn">
-  Enter password
-</button>
-<button id="createPasswordBtn">
-  Create password
-</button></div>
-<button id="connectBtn">Connect</button>
-  <p id="status" class="status"></p>
+
   <label class="avatar-picker">
     <img id="avatarPreview" class="hidden" alt="avatar preview">
-    
     <input id="avatarInput" type="file" accept="image/*" class="hidden">
-    <span id="avatarPickerLabel"> 😉 + add profile picture</span>
+    <span id="avatarPickerLabel">😉 + add profile picture</span>
   </label>
 
-  
+  <input id="roomPassword" type="password" placeholder="Room password" autocomplete="off">
+
+  <p class="hint password-hint">
+    First one here? Pick a password and <b>Create</b> the room.
+    Joining an existing room? Type the password someone already created and <b>Enter</b>.
+  </p>
+
+  <div class="password-btns">
+    <button id="createPasswordBtn" type="button">Create password</button>
+    <button id="enterPasswordBtn" type="button">Enter password</button>
+  </div>
+
+  <button id="connectBtn" disabled>Connect</button>
+
+  <p id="status" class="status"></p>
 </div>
 
 <div id="chatScreen" class="screen hidden">
   <div class="chat-layout">
     <aside class="sidebar">
-      <h3>Online</h3>
+      <div class="sidebar-header">
+        <h3>Online</h3>
+        <button id="changeAvatarBtn" class="small-btn" title="change your profile picture">🖼 photo</button>
+        <input id="avatarInputChat" type="file" accept="image/*" class="hidden">
+      </div>
       <ul id="userList"></ul>
       <h3>Wire traffic</h3>
-      <p class="hint">what actually goes over the socket - notice it's ciphertext / key material / SDP, never plaintext chat</p>
+      <p class="hint">what actually goes over the socket - notice it's ciphertext / key material / SDP, never plaintext chat or the room password</p>
       <div id="wire" class="wire"></div>
     </aside>
-
     <main class="chat-main">
       <div id="messages" class="messages"></div>
       <div class="input-row">

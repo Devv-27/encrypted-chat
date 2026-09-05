@@ -24,7 +24,7 @@ body {
 #loginScreen h1 { margin-bottom: 4px; }
 .subtitle { color: #9099a8; max-width: 440px; margin-bottom: 24px; font-size: 14px; }
 
-#username {
+#username, #roomPassword {
   padding: 10px 14px;
   border-radius: 6px;
   border: 1px solid #3a3f4b;
@@ -52,6 +52,17 @@ body {
 }
 .avatar-picker:hover { color: #e6e6e6; }
 
+.password-hint {
+  max-width: 320px;
+  margin: 0 0 10px 0;
+}
+
+.password-btns {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
 button {
   padding: 10px 20px;
   border-radius: 6px;
@@ -68,7 +79,22 @@ button.accept:hover { background: #349649; }
 button.reject { background: #d9534f; }
 button.reject:hover { background: #c0433f; }
 
-.status { color: #9099a8; font-size: 13px; margin-top: 10px; min-height: 18px; }
+.password-btns button {
+  padding: 8px 14px;
+  font-size: 13px;
+  background: #2c313c;
+  border: 1px solid #3a3f4b;
+  color: #c7cbd4;
+}
+.password-btns button:hover { background: #353b47; }
+.password-btns button.selected {
+  background: #4f7cff;
+  border-color: #4f7cff;
+  color: white;
+}
+
+.status { color: #9099a8; font-size: 13px; margin-top: 10px; min-height: 18px; max-width: 300px; }
+.status.error { color: #ff8a80; }
 
 .chat-layout { display: flex; height: 100vh; }
 
@@ -82,6 +108,12 @@ button.reject:hover { background: #c0433f; }
   overflow: hidden;
 }
 
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
 .sidebar h3 {
   font-size: 12px;
   text-transform: uppercase;
@@ -89,7 +121,17 @@ button.reject:hover { background: #c0433f; }
   color: #6e7686;
   margin: 16px 0 8px 0;
 }
+.sidebar-header h3 { margin: 0; }
 .sidebar h3:first-child { margin-top: 0; }
+
+.small-btn {
+  padding: 4px 8px;
+  font-size: 11px;
+  background: #2c313c;
+  border: 1px solid #3a3f4b;
+  color: #c7cbd4;
+}
+.small-btn:hover { background: #353b47; }
 
 #userList { list-style: none; padding: 0; margin: 0; }
 #userList li {

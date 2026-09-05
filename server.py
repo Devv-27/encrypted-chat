@@ -5,8 +5,17 @@ Important design point: this server never decrypts anything. It only
 knows usernames, connection ids, avatars and RSA public keys (all
 public by definition). AES session keys and chat messages pass through
 as opaque blobs - if you dumped the traffic at this layer you'd just
-see ciphertext. All the actual crypto lives in the browser (static/aes.js
-and static/rsa.js).
+see ciphertext. All the actual crypto lives in the browser (aes.js
+and rsa.js).
+
+Room password: the server stores only a SHA-256 hash of the room
+password, never the password itself. The first client to join with
+mode="create" sets that hash. Everyone after that must join with
+mode="enter" and a password whose hash matches, or they're rejected
+before being added to the room. When the room empties out, the hash
+is cleared so the next person in can create a fresh password. This is
+a plain admission check - it is NOT what encrypts the chat, that's the
+AES/RSA layer above.
 
 Call signaling (WebRTC offer/answer/ICE candidates) is also just
 relayed point-to-point between two clients - the server never touches
@@ -20,11 +29,13 @@ Needs: pip install websockets
 """
 
 import asyncio
+import hashlib
 import json
 import websockets
 
 clients = {}   # id -> {"ws", "username", "pubkey", "avatar"}
 next_id = 1
+room_password_hash = None  # SHA-256 hex digest, or None if room has no password yet
 
 # message types that are just "forward this to one specific client"
 # and don't need any special handling beyond stamping who it's from
@@ -38,8 +49,12 @@ DIRECT_RELAY_TYPES = {
 }
 
 
+def hash_password(password: str) -> str:
+    return hashlib.sha256(password.encode("utf-8")).hexdigest()
+
+
 async def handler(ws):
-    global next_id
+    global next_id, room_password_hash
     client_id = next_id
     next_id += 1
 
@@ -53,6 +68,41 @@ async def handler(ws):
         username = data["username"]
         pubkey = data["pubkey"]
         avatar = data.get("avatar")  # small base64 data URL or None
+        mode = data.get("mode")
+        password = data.get("password", "")
+
+        if mode == "create":
+            if room_password_hash is not None:
+                await ws.send(json.dumps({
+                    "type": "join_error",
+                    "message": "This room already has a password - use \"Enter password\" instead.",
+                }))
+                await ws.close()
+                return
+            if not password:
+                await ws.send(json.dumps({"type": "join_error", "message": "Password can't be empty."}))
+                await ws.close()
+                return
+            room_password_hash = hash_password(password)
+
+        elif mode == "enter":
+            if room_password_hash is None:
+                await ws.send(json.dumps({
+                    "type": "join_error",
+                    "message": "No room password has been created yet - ask someone to \"Create password\" first.",
+                }))
+                await ws.close()
+                return
+            if hash_password(password) != room_password_hash:
+                await ws.send(json.dumps({"type": "join_error", "message": "Incorrect room password."}))
+                await ws.close()
+                return
+
+        else:
+            await ws.send(json.dumps({"type": "join_error", "message": "Invalid join mode."}))
+            await ws.close()
+            return
+
         clients[client_id] = {
             "ws": ws, "username": username, "pubkey": pubkey, "avatar": avatar,
         }
@@ -122,6 +172,16 @@ async def handler(ws):
                     "id": data["id"],
                 })
 
+            elif msg_type == "avatar_update":
+                new_avatar = data.get("avatar")
+                if client_id in clients:
+                    clients[client_id]["avatar"] = new_avatar
+                await broadcast(client_id, {
+                    "type": "avatar_update",
+                    "from": client_id,
+                    "avatar": new_avatar,
+                })
+
     except websockets.exceptions.ConnectionClosed:
         pass
     except (KeyError, json.JSONDecodeError):
@@ -130,6 +190,10 @@ async def handler(ws):
         if client_id in clients:
             del clients[client_id]
             await broadcast(client_id, {"type": "user_left", "id": client_id})
+            if not clients:
+                # room is empty - clear the password so the next person
+                # in can create a fresh one
+                room_password_hash = None
 
 
 async def broadcast(sender_id, message):

@@ -5,7 +5,6 @@
  * implementations use OAEP padding and constant-time modpow; this one
  * doesn't, so don't reuse it for anything beyond this project.
  */
-
 function bigRandomBits(bits) {
   const bytes = new Uint8Array(bits / 8);
   crypto.getRandomValues(bytes);
@@ -14,7 +13,6 @@ function bigRandomBits(bits) {
   let hex = Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
   return BigInt('0x' + hex);
 }
-
 function modPow(base, exp, mod) {
   let result = 1n;
   base = base % mod;
@@ -25,7 +23,6 @@ function modPow(base, exp, mod) {
   }
   return result;
 }
-
 function randomInRange(min, max) {
   const range = max - min;
   const bits = range.toString(2).length;
@@ -35,7 +32,6 @@ function randomInRange(min, max) {
   } while (r > range);
   return min + r;
 }
-
 function millerRabin(n, rounds = 20) {
   if (n < 2n) return false;
   for (const p of [2n,3n,5n,7n,11n,13n,17n,19n,23n]) {
@@ -57,26 +53,22 @@ function millerRabin(n, rounds = 20) {
   }
   return true;
 }
-
 function randomPrime(bits) {
   while (true) {
     const candidate = bigRandomBits(bits);
     if (millerRabin(candidate)) return candidate;
   }
 }
-
 function egcd(a, b) {
   if (b === 0n) return [a, 1n, 0n];
   const [g, x1, y1] = egcd(b, a % b);
   return [g, y1, x1 - (a / b) * y1];
 }
-
 function modInverse(a, m) {
   const [g, x] = egcd(a % m, m);
   if (g !== 1n) throw new Error('modInverse: not coprime');
   return ((x % m) + m) % m;
 }
-
 // bits = total modulus size (e.g. 1024). Runs entirely client-side.
 function generateRSAKeyPair(bits = 1024) {
   const half = bits / 2;
@@ -94,6 +86,5 @@ function generateRSAKeyPair(bits = 1024) {
     privateKey: { d, n },
   };
 }
-
 function rsaEncryptInt(m, pub) { return modPow(m, pub.e, pub.n); }
 function rsaDecryptInt(c, priv) { return modPow(c, priv.d, priv.n); }

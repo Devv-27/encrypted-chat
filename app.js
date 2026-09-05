@@ -10,17 +10,24 @@
  * - every chat message is AES-CBC encrypted with a fresh random IV
  *   before it goes over the wire
  * - each message gets a random id so it can later be edited or deleted
+ * - the room is also gated by a plain password: the first person to
+ *   connect "creates" it (server stores only a SHA-256 hash of the
+ *   password, never the password itself), everyone after that "enters"
+ *   it and the server checks the hash matches before letting them in.
+ *   this is separate from the AES/RSA message encryption above - it's
+ *   just an admission check, not what protects the chat content.
  * - voice/video calls are handled separately in call.js (WebRTC, not
  *   our hand-rolled crypto - see the note at the top of that file)
  */
 
 let ws = null;
 let myId = null;
-let myKeys = null;          
-let sessionKey = null;      
+let myKeys = null;
+let sessionKey = null;
 let myAvatar = null;
-const users = {};          
-const messageEls = {};      
+let joinMode = null;        // 'create' | 'enter'
+const users = {};
+const messageEls = {};
 
 const $ = (id) => document.getElementById(id);
 
@@ -49,6 +56,11 @@ function encryptText(text) {
 function decryptText(ivHex, cipherHex) {
   const plain = aesCbcDecrypt(hexToBytes(cipherHex), sessionKey, hexToBytes(ivHex));
   return new TextDecoder().decode(plain);
+}
+
+function setStatus(msg, isError) {
+  $('status').textContent = msg;
+  $('status').classList.toggle('error', !!isError);
 }
 
 function log(msg) {
@@ -225,32 +237,67 @@ function handleAvatarPick(file) {
   });
 }
 
+// avatar picker on the login screen
 $('avatarInput').addEventListener('change', async (e) => {
   myAvatar = await handleAvatarPick(e.target.files[0]);
   $('avatarPreview').src = myAvatar || '';
   $('avatarPreview').classList.toggle('hidden', !myAvatar);
 });
 
+// "change photo" while already in the room - updates live and tells everyone
+$('changeAvatarBtn').addEventListener('click', () => $('avatarInputChat').click());
+$('avatarInputChat').addEventListener('change', async (e) => {
+  const newAvatar = await handleAvatarPick(e.target.files[0]);
+  if (!newAvatar) return;
+  myAvatar = newAvatar;
+  refreshUserList();
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    const payload = { type: 'avatar_update', avatar: myAvatar };
+    ws.send(JSON.stringify(payload));
+    showWireTraffic('→', { type: 'avatar_update', avatar: '[image data]' });
+  }
+});
+
+// ---- room password mode selection ----
+function selectMode(mode) {
+  joinMode = mode;
+  $('createPasswordBtn').classList.toggle('selected', mode === 'create');
+  $('enterPasswordBtn').classList.toggle('selected', mode === 'enter');
+  $('connectBtn').disabled = false;
+  setStatus(mode === 'create'
+    ? 'Will create a new room with this password.'
+    : 'Will join the room if this password matches.');
+}
+$('createPasswordBtn').addEventListener('click', () => selectMode('create'));
+$('enterPasswordBtn').addEventListener('click', () => selectMode('enter'));
+
 async function connect() {
   const username = $('username').value.trim();
+  const password = $('roomPassword').value;
+
   if (!username) { alert('pick a username first'); return; }
-  
+  if (!joinMode) { alert('choose "Create password" or "Enter password" first'); return; }
+  if (!password) { alert('type a room password'); return; }
+
   $('connectBtn').disabled = true;
-  $('status').textContent = 'generating RSA-1024 keypair...';
+  $('createPasswordBtn').disabled = true;
+  $('enterPasswordBtn').disabled = true;
+  setStatus('generating RSA-1024 keypair...');
   await new Promise(r => setTimeout(r, 30));
   myKeys = generateRSAKeyPair(1024);
 
-  $('status').textContent = 'connecting...';
+  setStatus('connecting...');
   ws = new WebSocket('wss://encrypted-chat-sx9o.onrender.com');
   ws.onopen = () => {
     const joinMsg = {
       type: 'join', username,
       pubkey: pubKeyToJSON(myKeys.publicKey),
       avatar: myAvatar,
-      
+      mode: joinMode,
+      password,
     };
     ws.send(JSON.stringify(joinMsg));
-    showWireTraffic('→', { ...joinMsg, avatar: myAvatar ? '[image data]' : null });
+    showWireTraffic('→', { ...joinMsg, avatar: myAvatar ? '[image data]' : null, password: '[not shown]' });
   };
 
   ws.onmessage = (event) => {
@@ -261,8 +308,18 @@ async function connect() {
     handleMessage(data);
   };
 
-  ws.onclose = () => { $('status').textContent = 'disconnected'; log('connection closed'); };
-  ws.onerror = () => { $('status').textContent = 'connection error - is server.py running?'; };
+  ws.onclose = () => {
+    setStatus('disconnected');
+    if ($('chatScreen').classList.contains('hidden')) {
+      // never made it into the chat - let them retry
+      $('connectBtn').disabled = false;
+      $('createPasswordBtn').disabled = false;
+      $('enterPasswordBtn').disabled = false;
+    } else {
+      log('connection closed');
+    }
+  };
+  ws.onerror = () => { setStatus('connection error - is server.py running?', true); };
 }
 
 function handleMessage(data) {
@@ -272,11 +329,19 @@ function handleMessage(data) {
   }
 
   switch (data.type) {
+    case 'join_error': {
+      setStatus(data.message || 'could not join the room', true);
+      $('connectBtn').disabled = false;
+      $('createPasswordBtn').disabled = false;
+      $('enterPasswordBtn').disabled = false;
+      break;
+    }
+
     case 'welcome': {
       myId = data.id;
       $('loginScreen').classList.add('hidden');
       $('chatScreen').classList.remove('hidden');
-      $('status').textContent = `connected as id ${myId}`;
+      setStatus(`connected as id ${myId}`);
 
       if (data.users.length === 0) {
         sessionKey = randomBytes(16);
@@ -338,6 +403,14 @@ function handleMessage(data) {
       break;
     }
 
+    case 'avatar_update': {
+      if (users[data.from]) {
+        users[data.from].avatar = data.avatar;
+        refreshUserList();
+      }
+      break;
+    }
+
     case 'user_left': {
       const u = users[data.id];
       if (u) log(`${u.username} left`);
@@ -371,4 +444,4 @@ function sendMessage() {
 $('connectBtn').addEventListener('click', connect);
 $('sendBtn').addEventListener('click', sendMessage);
 $('messageInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') sendMessage(); });
-$('username').addEventListener('keydown', (e) => { if (e.key === 'Enter') connect(); });
+$('roomPassword').addEventListener('keydown', (e) => { if (e.key === 'Enter') connect(); });
