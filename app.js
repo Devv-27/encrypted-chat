@@ -1,6 +1,12 @@
 /*
  * Ties the crypto together with the actual chat. The general idea:
  *
+ * - the server now supports many rooms at once, each identified by a
+ *   room name you type in. The first person to join a room "creates"
+ *   it with a password (server stores only a SHA-256 hash of it,
+ *   never the password itself); everyone after that "joins" it and
+ *   the server checks the hash matches before letting them in. This
+ *   is an admission check, not what encrypts the chat.
  * - every client generates its own RSA keypair on connect (private key
  *   never leaves the browser)
  * - the room shares one AES-128 session key. whoever's already in the
@@ -10,12 +16,9 @@
  * - every chat message is AES-CBC encrypted with a fresh random IV
  *   before it goes over the wire
  * - each message gets a random id so it can later be edited or deleted
- * - the room is also gated by a plain password: the first person to
- *   connect "creates" it (server stores only a SHA-256 hash of the
- *   password, never the password itself), everyone after that "enters"
- *   it and the server checks the hash matches before letting them in.
- *   this is separate from the AES/RSA message encryption above - it's
- *   just an admission check, not what protects the chat content.
+ * - "presence" (online / in a call) is broadcast in plaintext through
+ *   the server just so the sidebar can show accurate status dots -
+ *   it carries no message content
  * - voice/video calls are handled separately in call.js (WebRTC, not
  *   our hand-rolled crypto - see the note at the top of that file)
  */
@@ -25,8 +28,10 @@ let myId = null;
 let myKeys = null;
 let sessionKey = null;
 let myAvatar = null;
-let joinMode = null;        // 'create' | 'enter'
-const users = {};
+let joinMode = null;      // 'create' | 'join'
+let myRoom = null;
+let amCreator = false;
+const users = {};         // cid -> { username, pubkey, avatar, status, creator }
 const messageEls = {};
 
 const $ = (id) => document.getElementById(id);
@@ -57,6 +62,10 @@ function decryptText(ivHex, cipherHex) {
   const plain = aesCbcDecrypt(hexToBytes(cipherHex), sessionKey, hexToBytes(ivHex));
   return new TextDecoder().decode(plain);
 }
+function formatTime(iso) {
+  const d = iso ? new Date(iso) : new Date();
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
 
 function setStatus(msg, isError) {
   $('status').textContent = msg;
@@ -71,12 +80,18 @@ function log(msg) {
   $('messages').scrollTop = $('messages').scrollHeight;
 }
 
-function avatarNode(username, avatarDataUrl) {
-  if (avatarDataUrl) {
+function avatarNode(username, avatarValue) {
+  if (avatarValue && avatarValue.startsWith('data:')) {
     const img = document.createElement('img');
     img.className = 'avatar';
-    img.src = avatarDataUrl;
+    img.src = avatarValue;
     return img;
+  }
+  if (avatarValue) {
+    const div = document.createElement('div');
+    div.className = 'avatar avatar-emoji';
+    div.textContent = avatarValue;
+    return div;
   }
   const div = document.createElement('div');
   div.className = 'avatar avatar-fallback';
@@ -84,18 +99,22 @@ function avatarNode(username, avatarDataUrl) {
   return div;
 }
 
-function addMessage(id, username, avatarDataUrl, text, mine) {
+function addMessage(id, username, avatarValue, text, mine, sentAt) {
   const row = document.createElement('div');
   row.className = 'msg-row' + (mine ? ' mine' : '');
   row.dataset.id = id;
 
-  row.appendChild(avatarNode(username, avatarDataUrl));
+  row.appendChild(avatarNode(username, avatarValue));
 
   const bubble = document.createElement('div');
   bubble.className = 'bubble';
-  bubble.innerHTML = `<span class="msg-user"></span><span class="msg-text"></span><span class="msg-edited hidden"> (edited)</span>`;
+  bubble.innerHTML =
+    `<span class="msg-user"></span><span class="msg-text"></span>` +
+    `<span class="msg-edited hidden"> (edited)</span>` +
+    `<span class="msg-meta"></span>`;
   bubble.querySelector('.msg-user').textContent = username + ': ';
   bubble.querySelector('.msg-text').textContent = text;
+  bubble.querySelector('.msg-meta').textContent = formatTime(sentAt) + (mine ? '  ✓ sent' : '');
   row.appendChild(bubble);
 
   if (mine) {
@@ -179,24 +198,43 @@ function showWireTraffic(direction, obj) {
   while ($('wire').children.length > 12) $('wire').removeChild($('wire').lastChild);
 }
 
+// ---------- sidebar / user list ----------
+
 function refreshUserList() {
   const list = $('userList');
   list.innerHTML = '';
+  const filter = ($('userSearch').value || '').trim().toLowerCase();
 
-  const meLi = document.createElement('li');
-  meLi.appendChild(avatarNode($('username').value.trim() || 'me', myAvatar));
-  const meLabel = document.createElement('span');
-  meLabel.textContent = `${$('username').value.trim() || 'me'} (you)`;
-  meLi.appendChild(meLabel);
-  list.appendChild(meLi);
+  const myName = $('username').value.trim() || 'me';
+  if (!filter || myName.toLowerCase().includes(filter)) {
+    const meLi = document.createElement('li');
+    meLi.appendChild(avatarNode(myName, myAvatar));
+    const meLabel = document.createElement('span');
+    meLabel.textContent = `${myName} (You)` + (amCreator ? ' 👑' : '');
+    meLi.appendChild(meLabel);
+    const meStatus = document.createElement('span');
+    meStatus.className = 'user-status';
+    meStatus.innerHTML = `<span class="status-dot online"></span><small>Online</small>`;
+    meLi.appendChild(meStatus);
+    list.appendChild(meLi);
+  }
 
   for (const cid in users) {
     const u = users[cid];
+    if (filter && !u.username.toLowerCase().includes(filter)) continue;
+
     const li = document.createElement('li');
     li.appendChild(avatarNode(u.username, u.avatar));
     const label = document.createElement('span');
-    label.textContent = u.username;
+    label.textContent = u.username + (u.creator ? ' 👑' : '');
     li.appendChild(label);
+
+    const statusWrap = document.createElement('span');
+    statusWrap.className = 'user-status';
+    const inCall = u.status === 'in_call';
+    statusWrap.innerHTML =
+      `<span class="status-dot ${inCall ? 'in-call' : 'online'}"></span><small>${inCall ? 'In call' : 'Online'}</small>`;
+    li.appendChild(statusWrap);
 
     const callBtns = document.createElement('span');
     callBtns.className = 'call-btns';
@@ -214,7 +252,40 @@ function refreshUserList() {
 
     list.appendChild(li);
   }
+
+  const total = Object.keys(users).length + 1;
+  $('usersHeading').textContent = `Users (${total})`;
+  $('roomCardName').textContent = 'Room: ' + (myRoom || '—');
+  $('roomCardCount').textContent = `${total} online`;
+  $('chatHeaderSub').textContent = `${total} member${total === 1 ? '' : 's'} • Peer-to-Peer`;
 }
+$('userSearch').addEventListener('input', refreshUserList);
+
+function firstOtherUserId() {
+  const ids = Object.keys(users);
+  return ids.length ? Number(ids[0]) : null;
+}
+
+// ---------- avatar pickers ----------
+
+const PRESET_AVATARS = ['🦊', '🐱', '🐧', '🤖', '🌸', '⚡', '🎨', '🌙'];
+(function buildAvatarPresets() {
+  const row = $('avatarRow');
+  PRESET_AVATARS.forEach((emoji, idx) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'avatar-choice avatar-emoji-btn';
+    btn.textContent = emoji;
+    btn.style.setProperty('--avatar-hue', (idx * 47) % 360);
+    btn.addEventListener('click', () => {
+      myAvatar = emoji;
+      document.querySelectorAll('.avatar-choice').forEach(b => b.classList.remove('selected'));
+      btn.classList.add('selected');
+      $('avatarPreview').classList.add('hidden');
+    });
+    row.appendChild(btn);
+  });
+})();
 
 function handleAvatarPick(file) {
   return new Promise((resolve) => {
@@ -237,20 +308,20 @@ function handleAvatarPick(file) {
   });
 }
 
-// avatar picker on the login screen
 $('avatarInput').addEventListener('change', async (e) => {
   myAvatar = await handleAvatarPick(e.target.files[0]);
+  document.querySelectorAll('.avatar-choice').forEach(b => b.classList.remove('selected'));
   $('avatarPreview').src = myAvatar || '';
   $('avatarPreview').classList.toggle('hidden', !myAvatar);
 });
 
-// "change photo" while already in the room - updates live and tells everyone
 $('changeAvatarBtn').addEventListener('click', () => $('avatarInputChat').click());
 $('avatarInputChat').addEventListener('change', async (e) => {
   const newAvatar = await handleAvatarPick(e.target.files[0]);
   if (!newAvatar) return;
   myAvatar = newAvatar;
   refreshUserList();
+  $('chatMenu').classList.add('hidden');
   if (ws && ws.readyState === WebSocket.OPEN) {
     const payload = { type: 'avatar_update', avatar: myAvatar };
     ws.send(JSON.stringify(payload));
@@ -258,30 +329,44 @@ $('avatarInputChat').addEventListener('change', async (e) => {
   }
 });
 
-// ---- room password mode selection ----
+// ---------- username check / password toggle / mode select ----------
+
+$('username').addEventListener('input', () => {
+  $('usernameCheck').classList.toggle('hidden', !$('username').value.trim());
+});
+
+$('togglePasswordBtn').addEventListener('click', () => {
+  const inp = $('roomPassword');
+  inp.type = inp.type === 'password' ? 'text' : 'password';
+});
+
 function selectMode(mode) {
   joinMode = mode;
-  $('createPasswordBtn').classList.toggle('selected', mode === 'create');
-  $('enterPasswordBtn').classList.toggle('selected', mode === 'enter');
+  $('createRoomBtn').classList.toggle('selected', mode === 'create');
+  $('joinRoomBtn').classList.toggle('selected', mode === 'join');
   $('connectBtn').disabled = false;
   setStatus(mode === 'create'
     ? 'Will create a new room with this password.'
-    : 'Will join the room if this password matches.');
+    : 'Will join the room if the name and password match.');
 }
-$('createPasswordBtn').addEventListener('click', () => selectMode('create'));
-$('enterPasswordBtn').addEventListener('click', () => selectMode('enter'));
+$('createRoomBtn').addEventListener('click', () => selectMode('create'));
+$('joinRoomBtn').addEventListener('click', () => selectMode('join'));
+
+// ---------- connecting ----------
 
 async function connect() {
   const username = $('username').value.trim();
+  const room = $('roomName').value.trim();
   const password = $('roomPassword').value;
 
   if (!username) { alert('pick a username first'); return; }
-  if (!joinMode) { alert('choose "Create password" or "Enter password" first'); return; }
+  if (!room) { alert('type a room name'); return; }
+  if (!joinMode) { alert('choose "Create Room" or "Join Room" first'); return; }
   if (!password) { alert('type a room password'); return; }
 
   $('connectBtn').disabled = true;
-  $('createPasswordBtn').disabled = true;
-  $('enterPasswordBtn').disabled = true;
+  $('createRoomBtn').disabled = true;
+  $('joinRoomBtn').disabled = true;
   setStatus('generating RSA-1024 keypair...');
   await new Promise(r => setTimeout(r, 30));
   myKeys = generateRSAKeyPair(1024);
@@ -290,20 +375,20 @@ async function connect() {
   ws = new WebSocket('wss://encrypted-chat-sx9o.onrender.com');
   ws.onopen = () => {
     const joinMsg = {
-      type: 'join', username,
+      type: 'join', room, username,
       pubkey: pubKeyToJSON(myKeys.publicKey),
       avatar: myAvatar,
       mode: joinMode,
       password,
     };
     ws.send(JSON.stringify(joinMsg));
-    showWireTraffic('→', { ...joinMsg, avatar: myAvatar ? '[image data]' : null, password: '[not shown]' });
+    showWireTraffic('→', { ...joinMsg, avatar: myAvatar ? '[avatar]' : null, password: '[not shown]' });
   };
 
   ws.onmessage = (event) => {
     const data = JSON.parse(event.data);
     showWireTraffic('←', data.type === 'welcome' || data.type === 'user_joined'
-      ? { ...data, avatar: data.avatar ? '[image data]' : (data.users ? '[...]' : undefined) }
+      ? { ...data, avatar: data.avatar ? '[avatar]' : (data.users ? '[...]' : undefined) }
       : data);
     handleMessage(data);
   };
@@ -311,10 +396,9 @@ async function connect() {
   ws.onclose = () => {
     setStatus('disconnected');
     if ($('chatScreen').classList.contains('hidden')) {
-      // never made it into the chat - let them retry
       $('connectBtn').disabled = false;
-      $('createPasswordBtn').disabled = false;
-      $('enterPasswordBtn').disabled = false;
+      $('createRoomBtn').disabled = false;
+      $('joinRoomBtn').disabled = false;
     } else {
       log('connection closed');
     }
@@ -332,15 +416,18 @@ function handleMessage(data) {
     case 'join_error': {
       setStatus(data.message || 'could not join the room', true);
       $('connectBtn').disabled = false;
-      $('createPasswordBtn').disabled = false;
-      $('enterPasswordBtn').disabled = false;
+      $('createRoomBtn').disabled = false;
+      $('joinRoomBtn').disabled = false;
       break;
     }
 
     case 'welcome': {
       myId = data.id;
+      myRoom = data.room;
+      amCreator = !!data.isCreator;
       $('loginScreen').classList.add('hidden');
       $('chatScreen').classList.remove('hidden');
+      $('chatRoomTitle').textContent = '# ' + myRoom;
       setStatus(`connected as id ${myId}`);
 
       if (data.users.length === 0) {
@@ -348,7 +435,10 @@ function handleMessage(data) {
         log('you are the first one here - a new AES-128 session key was generated locally');
       } else {
         for (const u of data.users) {
-          users[u.id] = { username: u.username, pubkey: pubKeyFromJSON(u.pubkey), avatar: u.avatar };
+          users[u.id] = {
+            username: u.username, pubkey: pubKeyFromJSON(u.pubkey),
+            avatar: u.avatar, status: u.status || 'online', creator: !!u.creator,
+          };
         }
         log('waiting for an existing member to share the session key...');
       }
@@ -357,7 +447,10 @@ function handleMessage(data) {
     }
 
     case 'user_joined': {
-      users[data.id] = { username: data.username, pubkey: pubKeyFromJSON(data.pubkey), avatar: data.avatar };
+      users[data.id] = {
+        username: data.username, pubkey: pubKeyFromJSON(data.pubkey),
+        avatar: data.avatar, status: data.status || 'online', creator: !!data.creator,
+      };
       refreshUserList();
       log(`${data.username} joined`);
 
@@ -383,11 +476,11 @@ function handleMessage(data) {
 
     case 'msg': {
       if (!sessionKey) {
-        addMessage(data.id, data.username, users[data.from] && users[data.from].avatar, '[cannot decrypt yet - no session key]', false);
+        addMessage(data.id, data.username, users[data.from] && users[data.from].avatar, '[cannot decrypt yet - no session key]', false, data.sentAt);
         break;
       }
       const text = decryptText(data.iv, data.ciphertext);
-      addMessage(data.id, data.username, users[data.from] && users[data.from].avatar, text, false);
+      addMessage(data.id, data.username, users[data.from] && users[data.from].avatar, text, false, data.sentAt);
       break;
     }
 
@@ -406,6 +499,14 @@ function handleMessage(data) {
     case 'avatar_update': {
       if (users[data.from]) {
         users[data.from].avatar = data.avatar;
+        refreshUserList();
+      }
+      break;
+    }
+
+    case 'presence': {
+      if (users[data.from]) {
+        users[data.from].status = data.status;
         refreshUserList();
       }
       break;
@@ -432,12 +533,13 @@ function sendMessage() {
   if (!sessionKey) { alert('still waiting on the session key from another member'); return; }
 
   const id = newMsgId();
+  const sentAt = new Date().toISOString();
   const { iv, cipher } = encryptText(text);
-  const payload = { type: 'msg', id, iv: bytesToHex(iv), ciphertext: bytesToHex(cipher) };
+  const payload = { type: 'msg', id, iv: bytesToHex(iv), ciphertext: bytesToHex(cipher), sentAt };
   ws.send(JSON.stringify(payload));
   showWireTraffic('→', payload);
 
-  addMessage(id, $('username').value.trim(), myAvatar, text, true);
+  addMessage(id, $('username').value.trim(), myAvatar, text, true, sentAt);
   input.value = '';
 }
 
@@ -445,3 +547,63 @@ $('connectBtn').addEventListener('click', connect);
 $('sendBtn').addEventListener('click', sendMessage);
 $('messageInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') sendMessage(); });
 $('roomPassword').addEventListener('keydown', (e) => { if (e.key === 'Enter') connect(); });
+
+// ---------- header call buttons ----------
+
+$('headerAudioBtn').addEventListener('click', () => {
+  const id = firstOtherUserId();
+  if (id == null) { alert('no one else is online in this room yet'); return; }
+  startCall(id, false);
+});
+$('headerVideoBtn').addEventListener('click', () => {
+  const id = firstOtherUserId();
+  if (id == null) { alert('no one else is online in this room yet'); return; }
+  startCall(id, true);
+});
+
+// ---------- header menu ----------
+
+$('chatMenuBtn').addEventListener('click', (e) => {
+  e.stopPropagation();
+  $('chatMenu').classList.toggle('hidden');
+});
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('.menu-wrap')) $('chatMenu').classList.add('hidden');
+});
+$('leaveRoomBtn').addEventListener('click', () => {
+  if (confirm('leave this room?')) {
+    if (ws) ws.close();
+    location.reload();
+  }
+});
+
+// ---------- emoji panel ----------
+
+const QUICK_EMOJIS = ['😀', '😂', '😍', '👍', '🙏', '🎉', '🔥', '❤️', '😢', '😮'];
+(function buildEmojiPanel() {
+  const panel = $('emojiPanel');
+  QUICK_EMOJIS.forEach((e) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = e;
+    b.addEventListener('click', () => {
+      $('messageInput').value += e;
+      $('messageInput').focus();
+      panel.classList.add('hidden');
+    });
+    panel.appendChild(b);
+  });
+})();
+$('emojiBtn').addEventListener('click', (e) => {
+  e.stopPropagation();
+  $('emojiPanel').classList.toggle('hidden');
+});
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('.emoji-wrap')) $('emojiPanel').classList.add('hidden');
+});
+
+// ---------- attach (not implemented, but honest about it) ----------
+
+$('attachBtn').addEventListener('click', () => {
+  alert("File sharing isn't implemented in this build yet.");
+});
