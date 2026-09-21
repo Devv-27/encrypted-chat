@@ -22,9 +22,22 @@
  * Depends on `ws` and `users` being available from app.js.
  */
 
+// NOTE: openrelay.metered.ca's free static-credential TURN server has been
+// reported unreliable lately (metered.ca has been pushing people toward an
+// API-key-based TURN endpoint instead - see metered.ca/tools/openrelay).
+// This matters specifically for the case you're hitting: calls between two
+// devices on *different* networks (e.g. phone on mobile data + laptop on
+// WiFi) almost always need a working TURN relay, not just STUN - STUN alone
+// only helps when a direct/NAT-punched connection is possible, which is
+// common on the same WiFi but unreliable across different networks/carriers.
+// If calls still fail after this, get a free API key at metered.ca (or
+// another TURN provider) and swap the two turn: entries below for the
+// credentials it gives you - that's the most likely remaining culprit.
 const ICE_SERVERS = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:global.stun.twilio.com:3478' },
     {
       urls: 'turn:openrelay.metered.ca:80',
       username: 'openrelayproject',
@@ -32,6 +45,11 @@ const ICE_SERVERS = {
     },
     {
       urls: 'turn:openrelay.metered.ca:443',
+      username: 'openrelayproject',
+      credential: 'openrelayproject',
+    },
+    {
+      urls: 'turn:openrelay.metered.ca:443?transport=tcp',
       username: 'openrelayproject',
       credential: 'openrelayproject',
     },
@@ -183,6 +201,7 @@ function toggleCamera() {
 }
 
 function showCallOverlay(state, video) {
+  if (typeof closeSidebar === 'function') closeSidebar();
   $c('callOverlay').classList.remove('hidden');
   $c('callPeerName').textContent = callPeerName;
   $c('callStatusText').textContent = state === 'calling' ? 'calling...' : 'in call';
@@ -206,6 +225,7 @@ function handleCallSignal(data) {
       const caller = users[data.from];
       $c('incomingCallerName').textContent = caller ? caller.username : 'unknown';
       $c('incomingCallType').textContent = data.video ? 'video call' : 'voice call';
+      if (typeof closeSidebar === 'function') closeSidebar();
       $c('incomingCallModal').classList.remove('hidden');
       break;
     }

@@ -474,6 +474,82 @@ button.reject { background: var(--red); color: white; border: none; border-radiu
   flex-shrink: 0;
 }
 
+/* ---------- mobile menu toggle (hidden on desktop) ---------- */
+
+.menu-toggle { display: none; }
+.sidebar-backdrop { display: none; }
+
+/* ---------- responsive: phones & small tablets ---------- */
+
+@media (max-width: 768px) {
+  html, body { height: 100%; overflow: hidden; }
+  .screen { height: 100dvh; }
+
+  /* login card gets breathing room but no fixed side padding waste */
+  #loginScreen { padding: 16px; }
+  .login-card { max-width: 100%; }
+  .form-card { padding: 18px; }
+
+  /* --- the core fix: sidebar becomes an off-canvas drawer --- */
+  .chat-layout { height: 100dvh; position: relative; overflow: hidden; }
+
+  .sidebar {
+    position: fixed;
+    top: 0; left: 0; bottom: 0;
+    width: min(82vw, 320px);
+    z-index: 45;
+    transform: translateX(-100%);
+    transition: transform 0.22s ease;
+    padding-top: max(16px, env(safe-area-inset-top));
+    padding-bottom: max(16px, env(safe-area-inset-bottom));
+    box-shadow: 8px 0 24px rgba(0,0,0,0.45);
+  }
+  .sidebar.open { transform: translateX(0); }
+
+  .sidebar-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.5);
+    z-index: 44;
+  }
+  .sidebar-backdrop.hidden { display: none; }
+
+  .menu-toggle { display: inline-flex; align-items: center; justify-content: center; }
+
+  .chat-main { width: 100%; }
+
+  .chat-header { padding: 10px 12px; padding-top: max(10px, env(safe-area-inset-top)); }
+  .chat-room-title { font-size: 14px; }
+  .e2e-badge { display: none; } /* reclaim header space on small screens */
+
+  /* bigger tap targets everywhere a finger has to land */
+  .icon-btn { padding: 10px 12px; font-size: 16px; }
+  .call-btns button { padding: 8px 10px; font-size: 15px; }
+  .send-btn { width: 44px; height: 44px; }
+
+  .messages { padding: 12px; }
+  .msg-row .bubble { max-width: 84%; }
+  .input-row { padding: 10px 12px; padding-bottom: max(10px, env(safe-area-inset-bottom)); }
+
+  .dropdown { min-width: 150px; }
+  .modal-box { padding: 20px; width: min(88vw, 360px); }
+
+  /* --- call overlay on a small screen --- */
+  .call-overlay { padding-bottom: env(safe-area-inset-bottom); }
+  .call-header { padding: 12px 16px; padding-top: max(12px, env(safe-area-inset-top)); font-size: 13px; }
+  .video-area video#localVideo { width: 96px; bottom: 10px; right: 10px; }
+  .call-controls { flex-wrap: wrap; gap: 8px; padding: 12px; }
+  .call-controls button { flex: 1 1 auto; min-width: 90px; padding: 12px 14px; font-size: 14px; }
+}
+
+/* very small phones */
+@media (max-width: 360px) {
+  .mode-btns { flex-direction: column; }
+  .feature-badges { flex-wrap: wrap; }
+  .badge { flex: 1 1 40%; }
+}
+
 /* ---------- call UI ---------- */
 
 .modal {
@@ -527,7 +603,7 @@ button.reject { background: var(--red); color: white; border: none; border-radiu
 }
 .video-area.audio-only video { display: none; }
 .video-area.audio-only::after {
-  content: '🎤 audio call';
+  content: 'ðŸŽ¤ audio call';
   color: var(--text-muted);
   font-size: 16px;
 }

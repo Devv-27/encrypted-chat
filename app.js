@@ -241,11 +241,11 @@ function refreshUserList() {
     const audioBtn = document.createElement('button');
     audioBtn.textContent = '📞';
     audioBtn.title = 'voice call';
-    audioBtn.addEventListener('click', () => startCall(Number(cid), false));
+    audioBtn.addEventListener('click', () => { closeSidebar(); startCall(Number(cid), false); });
     const videoBtn = document.createElement('button');
     videoBtn.textContent = '🎥';
     videoBtn.title = 'video call';
-    videoBtn.addEventListener('click', () => startCall(Number(cid), true));
+    videoBtn.addEventListener('click', () => { closeSidebar(); startCall(Number(cid), true); });
     callBtns.appendChild(audioBtn);
     callBtns.appendChild(videoBtn);
     li.appendChild(callBtns);
@@ -560,6 +560,21 @@ $('headerVideoBtn').addEventListener('click', () => {
   if (id == null) { alert('no one else is online in this room yet'); return; }
   startCall(id, true);
 });
+
+// ---------- mobile sidebar drawer ----------
+
+function openSidebar() {
+  $('sidebar').classList.add('open');
+  $('sidebarBackdrop').classList.remove('hidden');
+}
+function closeSidebar() {
+  $('sidebar').classList.remove('open');
+  $('sidebarBackdrop').classList.add('hidden');
+}
+$('sidebarToggleBtn').addEventListener('click', () => {
+  $('sidebar').classList.contains('open') ? closeSidebar() : openSidebar();
+});
+$('sidebarBackdrop').addEventListener('click', closeSidebar);
 
 // ---------- header menu ----------
 
