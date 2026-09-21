@@ -2,90 +2,201 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>encrypted chat</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0A0F16">
+<title>Encrypted Chat</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
-<div id="loginScreen" class="screen">
-  <h1>Encrypted Chat</h1>
-  <p class="subtitle">RSA-1024 key exchange + AES-128-CBC messages, implemented from scratch — no crypto libraries. Calls use WebRTC.</p>
+<!-- ───────────────────────── login ───────────────────────── -->
+<div id="loginScreen" class="screen login">
 
-  <div id="insecureWarning" class="warn hidden">
-    ⚠ This page is not running on <code>localhost</code> or <code>https</code>, so the browser
-    will refuse microphone and camera access. Run <code>python serve.py</code> and open
-    <code>http://localhost:8000</code> instead of the file:// path.
-  </div>
+  <section class="login-form">
+    <header class="brand">
+      <span class="brand-lock" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+          <rect x="4" y="10.5" width="16" height="10" rx="2.5"/>
+          <path d="M8 10.5V7a4 4 0 0 1 8 0v3.5"/>
+        </svg>
+      </span>
+      <h1>Encrypted Chat</h1>
+      <p class="brand-sub">AES-128-CBC messages, RSA-1024 key exchange. Both written from scratch — no crypto library. The server relays bytes it cannot read.</p>
+    </header>
 
-  <input id="username" type="text" placeholder="pick a username" autocomplete="off">
-  <input id="roomPassword" type="password" placeholder="room password" autocomplete="off">
+    <div id="insecureWarning" class="notice hidden">
+      This page isn't on <code>localhost</code> or <code>https</code>, so the browser blocks the
+      microphone and camera. Run <code>python serve.py</code> and open <code>http://localhost:8000</code>.
+    </div>
 
-  <div class="btn-row">
-    <button id="createPasswordBtn">Create room</button>
-    <button id="enterPasswordBtn">Enter room</button>
-  </div>
-  <p class="hint login-hint">Everyone who types the same password lands in the same room. The password never leaves your browser — only its SHA-256 hash is sent.</p>
+    <div class="field-group">
+      <label class="profile-row" for="avatarInput">
+        <span class="avatar-slot">
+          <img id="avatarPreview" class="hidden" alt="">
+          <span id="avatarInitial" class="avatar-initial">?</span>
+          <span class="avatar-edit" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <path d="M12 5v14M5 12h14"/>
+            </svg>
+          </span>
+        </span>
+        <span class="profile-copy">
+          <span class="profile-title">Profile picture</span>
+          <span class="profile-note">Shrunk to 64px in your browser</span>
+        </span>
+        <input id="avatarInput" type="file" accept="image/*" class="hidden">
+      </label>
 
-  <p id="status" class="status"></p>
-
-  <label class="avatar-picker">
-    <img id="avatarPreview" class="hidden" alt="avatar preview">
-    <input id="avatarInput" type="file" accept="image/*" class="hidden">
-    <span id="avatarPickerLabel">😉 + add profile picture</span>
-  </label>
-</div>
-
-<div id="chatScreen" class="screen hidden">
-  <div class="chat-layout">
-    <aside class="sidebar">
-      <h3>Online</h3>
-      <ul id="userList"></ul>
-      <h3>Wire traffic</h3>
-      <p class="hint">what actually goes over the socket - notice it's ciphertext / key material / SDP, never plaintext chat</p>
-      <div id="wire" class="wire"></div>
-    </aside>
-    <main class="chat-main">
-      <div id="messages" class="messages"></div>
-      <div class="input-row">
-        <label class="attach-btn" title="send a file or image">
-          📎
-          <input id="fileInput" type="file" class="hidden">
-        </label>
-        <input id="messageInput" type="text" placeholder="type a message..." autocomplete="off">
-        <button id="sendBtn">Send</button>
+      <div class="field">
+        <label for="username">Display name</label>
+        <input id="username" type="text" placeholder="e.g. Ananya" autocomplete="nickname" maxlength="24">
       </div>
-    </main>
-  </div>
+    </div>
+
+    <div class="field-group">
+      <div class="field">
+        <label for="roomId">Room ID</label>
+        <div class="field-row">
+          <input id="roomId" class="mono" type="text" placeholder="crypto-lab-3" autocomplete="off" maxlength="32">
+          <button id="diceBtn" class="ghost-btn" type="button" title="Generate a random room ID">Shuffle</button>
+        </div>
+      </div>
+
+      <div class="field">
+        <label for="roomPassword">Room password</label>
+        <div class="field-row">
+          <input id="roomPassword" type="password" placeholder="shared secret" autocomplete="off">
+          <button id="revealBtn" class="ghost-btn" type="button" title="Show password">Show</button>
+        </div>
+      </div>
+      <p class="field-help">Both are hashed together in your browser. Anyone with the same pair lands in the same room — nobody else can see it exists.</p>
+    </div>
+
+    <div class="actions">
+      <button id="createPasswordBtn" class="btn-primary">Create room</button>
+      <button id="enterPasswordBtn" class="btn-secondary">Join room</button>
+    </div>
+  </section>
+
+  <!-- live keygen readout: the hero -->
+  <aside class="login-readout" aria-live="polite">
+    <div class="readout-inner">
+      <div class="readout-head">
+        <span id="readoutStage" class="readout-stage">Waiting</span>
+        <span id="readoutTicker" class="readout-ticker mono"></span>
+      </div>
+      <div id="readoutHex" class="readout-hex mono" aria-hidden="true"></div>
+
+      <ol id="readoutSteps" class="readout-steps">
+        <li><span class="step-n mono">1</span><span>Your browser hunts two 512-bit primes with Miller-Rabin and builds a keypair. The private half never leaves this tab.</span></li>
+        <li><span class="step-n mono">2</span><span>The room ID and password are hashed together. The server receives that hash and nothing else.</span></li>
+        <li><span class="step-n mono">3</span><span>Someone already in the room wraps the AES session key with your public key and sends it through.</span></li>
+      </ol>
+
+      <p id="readoutCaption" class="readout-caption">Nothing has been sent yet.</p>
+    </div>
+  </aside>
 </div>
 
-<!-- incoming call popup -->
+<!-- ───────────────────────── chat ───────────────────────── -->
+<div id="chatScreen" class="screen chat hidden">
+
+  <button id="railScrim" class="rail-scrim hidden" aria-label="Close panel"></button>
+
+  <aside id="rail" class="rail">
+    <div class="rail-room">
+      <div class="rail-room-line">
+        <span class="lock-dot" aria-hidden="true"></span>
+        <span id="railRoomId" class="mono rail-room-id"></span>
+        <button id="copyRoomBtn" class="ghost-btn tiny" title="Copy room ID">Copy</button>
+      </div>
+      <p id="railRoomState" class="rail-room-state">Session key held locally</p>
+    </div>
+
+    <div class="rail-scroll">
+      <section class="rail-block">
+        <h2 class="rail-heading">In this room <span id="userCount" class="count">1</span></h2>
+        <ul id="userList" class="user-list"></ul>
+      </section>
+
+      <section class="rail-block rail-wire">
+        <h2 class="rail-heading">Wire tape</h2>
+        <p class="rail-note">Every frame leaving this tab. Chat text never appears here in the clear.</p>
+        <div id="wire" class="wire"></div>
+      </section>
+    </div>
+  </aside>
+
+  <main class="stage">
+    <header class="topbar">
+      <button id="railToggle" class="icon-btn rail-toggle" aria-label="Show room panel">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <path d="M4 7h16M4 12h16M4 17h16"/>
+        </svg>
+      </button>
+      <div class="topbar-title">
+        <span id="topbarRoom" class="mono"></span>
+        <span id="topbarPeople" class="topbar-sub">1 here</span>
+      </div>
+      <button id="leaveBtn" class="ghost-btn tiny">Leave</button>
+    </header>
+
+    <div id="messages" class="messages"></div>
+
+    <div id="dropHint" class="drop-hint hidden">Release to encrypt and send</div>
+
+    <form id="composer" class="composer" autocomplete="off">
+      <label class="icon-btn attach" title="Attach a file">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 11.5 12.5 20a5 5 0 0 1-7-7l8.5-8.5a3.5 3.5 0 0 1 5 5L10.5 18a2 2 0 0 1-3-3l8-8"/>
+        </svg>
+        <input id="fileInput" type="file" class="hidden">
+      </label>
+      <input id="messageInput" type="text" placeholder="Write a message" autocomplete="off">
+      <button id="sendBtn" class="icon-btn send" type="submit" aria-label="Send">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M22 2 11 13M22 2l-7 20-4-9-9-4z"/>
+        </svg>
+      </button>
+    </form>
+  </main>
+</div>
+
+<!-- incoming call -->
 <div id="incomingCallModal" class="modal hidden">
   <div class="modal-box">
-    <p><strong id="incomingCallerName"></strong> is calling</p>
-    <p class="hint" id="incomingCallType"></p>
+    <div id="incomingAvatar" class="call-avatar"></div>
+    <p class="call-who"><strong id="incomingCallerName"></strong></p>
+    <p id="incomingCallType" class="call-kind"></p>
     <div class="modal-actions">
-      <button id="acceptCallBtn" class="accept">Accept</button>
-      <button id="rejectCallBtn" class="reject">Decline</button>
+      <button id="rejectCallBtn" class="btn-danger">Decline</button>
+      <button id="acceptCallBtn" class="btn-accept">Answer</button>
     </div>
   </div>
 </div>
 
-<!-- active call overlay -->
+<!-- active call -->
 <div id="callOverlay" class="call-overlay hidden">
-  <div class="call-header">
-    <span id="callPeerName"></span> — <span id="callStatusText"></span>
-  </div>
+  <header class="call-header">
+    <span id="callPeerName" class="call-peer"></span>
+    <span id="callStatusText" class="call-status"></span>
+  </header>
   <div id="videoArea" class="video-area">
+    <div id="callAudioBadge" class="call-audio-badge"></div>
     <video id="remoteVideo" autoplay playsinline></video>
     <video id="localVideo" autoplay playsinline muted></video>
   </div>
   <div class="call-controls">
-    <button id="muteBtn">Mute</button>
-    <button id="cameraBtn">Camera off</button>
-    <button id="hangupBtn" class="reject">Hang up</button>
+    <button id="muteBtn" class="btn-secondary">Mute</button>
+    <button id="cameraBtn" class="btn-secondary">Camera off</button>
+    <button id="hangupBtn" class="btn-danger">Hang up</button>
   </div>
 </div>
+
+<div id="toast" class="toast hidden"></div>
 
 <script src="rsa.js"></script>
 <script src="aes.js"></script>
