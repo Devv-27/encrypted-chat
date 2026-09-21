@@ -2,145 +2,59 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
-<title>Encrypted Chat</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>encrypted chat</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
 <div id="loginScreen" class="screen">
-  <div class="login-card">
-    <div class="brand">
-      <div class="brand-logo">🔒</div>
-      <h1>Encrypted <span class="grad-text">Chat</span></h1>
-      <p class="brand-sub">Talk Freely. Stay Private.</p>
-    </div>
+  <h1>Encrypted Chat</h1>
+  <p class="subtitle">RSA-1024 key exchange + AES-128-CBC messages, implemented from scratch — no crypto libraries. Calls use WebRTC.</p>
 
-    <div class="form-card">
-      <label class="field-label">Pick a username</label>
-      <div class="field-row">
-        <span class="field-icon">👤</span>
-        <input id="username" type="text" placeholder="Pick a username" autocomplete="off">
-        <span id="usernameCheck" class="field-check hidden">✓</span>
-      </div>
-
-      <label class="field-label">Add profile picture (optional)</label>
-      <div class="avatar-row" id="avatarRow">
-        <label class="avatar-choice avatar-upload" title="upload a photo">
-          <input id="avatarInput" type="file" accept="image/*" class="hidden">
-          <span>+</span>
-        </label>
-      </div>
-      <img id="avatarPreview" class="avatar-preview hidden" alt="avatar preview">
-
-      <label class="field-label">Room name</label>
-      <div class="field-row">
-        <span class="field-icon">#</span>
-        <input id="roomName" type="text" placeholder="e.g. devs" autocomplete="off">
-      </div>
-
-      <label class="field-label">Room password</label>
-      <div class="field-row">
-        <span class="field-icon">🔒</span>
-        <input id="roomPassword" type="password" placeholder="Room password" autocomplete="off">
-        <button type="button" id="togglePasswordBtn" class="field-icon-btn" title="show/hide password">👁</button>
-      </div>
-
-      <div class="mode-btns">
-        <button type="button" id="createRoomBtn" class="mode-btn create">
-          + Create Room
-          <small>Create a new room with a password</small>
-        </button>
-        <button type="button" id="joinRoomBtn" class="mode-btn join">
-          👥 Join Room
-          <small>Join an existing room</small>
-        </button>
-      </div>
-
-      <button id="connectBtn" class="connect-btn" disabled>➤ Connect</button>
-    </div>
-
-    <div class="feature-badges">
-      <div class="badge"><span>🛡</span>End-to-End<br>Encrypted</div>
-      <div class="badge"><span>👥</span>No Servers<br>Peer-to-Peer</div>
-      <div class="badge"><span>🙈</span>Your Privacy<br>Our Priority</div>
-    </div>
-
-    <p id="status" class="status"></p>
-    <p class="quote">"Good conversations are rare. Secure ones are rarer."</p>
+  <div id="insecureWarning" class="warn hidden">
+    ⚠ This page is not running on <code>localhost</code> or <code>https</code>, so the browser
+    will refuse microphone and camera access. Run <code>python serve.py</code> and open
+    <code>http://localhost:8000</code> instead of the file:// path.
   </div>
+
+  <input id="username" type="text" placeholder="pick a username" autocomplete="off">
+  <input id="roomPassword" type="password" placeholder="room password" autocomplete="off">
+
+  <div class="btn-row">
+    <button id="createPasswordBtn">Create room</button>
+    <button id="enterPasswordBtn">Enter room</button>
+  </div>
+  <p class="hint login-hint">Everyone who types the same password lands in the same room. The password never leaves your browser — only its SHA-256 hash is sent.</p>
+
+  <p id="status" class="status"></p>
+
+  <label class="avatar-picker">
+    <img id="avatarPreview" class="hidden" alt="avatar preview">
+    <input id="avatarInput" type="file" accept="image/*" class="hidden">
+    <span id="avatarPickerLabel">😉 + add profile picture</span>
+  </label>
 </div>
 
 <div id="chatScreen" class="screen hidden">
   <div class="chat-layout">
-    <div id="sidebarBackdrop" class="sidebar-backdrop hidden"></div>
-    <aside id="sidebar" class="sidebar">
-      <div class="sidebar-brand">
-        <span class="brand-logo small">🔒</span>
-        <span class="brand-name">Encrypted Chat</span>
-        <span class="conn-dot"></span>
-      </div>
-
-      <div class="field-row search-row">
-        <span class="field-icon">🔍</span>
-        <input id="userSearch" type="text" placeholder="Search users...">
-      </div>
-
-      <h3>Room</h3>
-      <div class="room-card">
-        <span class="room-icon">👥</span>
-        <div class="room-info">
-          <div id="roomCardName">Room: —</div>
-          <div id="roomCardCount" class="hint">0 online</div>
-        </div>
-      </div>
-
-      <h3 id="usersHeading">Users (0)</h3>
+    <aside class="sidebar">
+      <h3>Online</h3>
       <ul id="userList"></ul>
-
       <h3>Wire traffic</h3>
-      <p class="hint">what actually goes over the socket - notice it's ciphertext / key material / SDP, never plaintext chat or the room password</p>
+      <p class="hint">what actually goes over the socket - notice it's ciphertext / key material / SDP, never plaintext chat</p>
       <div id="wire" class="wire"></div>
-
-      <p class="quote small">"Same minds, safer conversations."</p>
     </aside>
-
     <main class="chat-main">
-      <div class="chat-header">
-        <div class="chat-header-top">
-          <div class="chat-header-left">
-            <button id="sidebarToggleBtn" class="icon-btn menu-toggle" title="menu">☰</button>
-            <span id="chatRoomTitle" class="chat-room-title"># room</span>
-            <span class="e2e-badge">🔒 End-to-End Encrypted</span>
-          </div>
-          <div class="chat-header-actions">
-            <button id="headerAudioBtn" class="icon-btn" title="voice call">📞</button>
-            <button id="headerVideoBtn" class="icon-btn" title="video call">🎥</button>
-            <div class="menu-wrap">
-              <button id="chatMenuBtn" class="icon-btn" title="menu">⋮</button>
-              <div id="chatMenu" class="dropdown hidden">
-                <button id="changeAvatarBtn" type="button">Change photo</button>
-                <input id="avatarInputChat" type="file" accept="image/*" class="hidden">
-                <button id="leaveRoomBtn" type="button">Leave room</button>
-              </div>
-            </div>
-          </div>
-        </div>
-        <div id="chatHeaderSub" class="hint">0 members • Peer-to-Peer</div>
-      </div>
-
       <div id="messages" class="messages"></div>
-
       <div class="input-row">
-        <button id="attachBtn" class="icon-btn" title="attach file">📎</button>
-        <input id="messageInput" type="text" placeholder="Type a message..." autocomplete="off">
-        <div class="emoji-wrap">
-          <button id="emojiBtn" class="icon-btn" title="emoji">🙂</button>
-          <div id="emojiPanel" class="dropdown emoji-panel hidden"></div>
-        </div>
-        <button id="sendBtn" class="send-btn" title="send">➤</button>
+        <label class="attach-btn" title="send a file or image">
+          📎
+          <input id="fileInput" type="file" class="hidden">
+        </label>
+        <input id="messageInput" type="text" placeholder="type a message..." autocomplete="off">
+        <button id="sendBtn">Send</button>
       </div>
-      <p class="quote small center">"Encrypted today. A freer tomorrow."</p>
     </main>
   </div>
 </div>

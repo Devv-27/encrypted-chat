@@ -1,69 +1,36 @@
 /*
- * Voice + video calling over WebRTC. The chat messages use our own
- * hand-rolled AES/RSA, but call audio/video does NOT go through that -
- * WebRTC media is encrypted end-to-end automatically by the browser
- * (DTLS-SRTP), so there's nothing to hand-roll here. What this file
- * does is the "signaling": using our existing websocket to pass an
- * SDP offer/answer and ICE candidates between two browsers so they can
- * find each other and set up a direct connection.
+ * Voice + video calling over WebRTC. Chat messages use our own
+ * hand-rolled AES/RSA, but call audio/video does NOT - WebRTC media is
+ * encrypted end-to-end by the browser (DTLS-SRTP). What this file does
+ * is the "signaling": passing an SDP offer/answer and ICE candidates
+ * between two browsers over our existing websocket.
  *
- * Fixes vs the earlier version:
- * - ICE candidates that arrive before the peer connection has a remote
- *   description (very common - the caller's candidates start flowing
- *   the instant it calls setLocalDescription, often before the callee
- *   has even clicked Accept) are now queued and flushed once the
- *   remote description is set, instead of being silently dropped.
- * - call_answer now properly awaits setRemoteDescription before
- *   flipping the UI to "active" and before applying queued candidates.
- * - added a public STUN+TURN server pair, not just STUN, so calls can
- *   still connect when both sides are behind strict/symmetric NATs
- *   (STUN alone fails there).
+ * Two fixes worth knowing about:
  *
- * Depends on `ws` and `users` being available from app.js.
+ * 1. Secure context. getUserMedia only works on https:// or
+ *    http://localhost. Opening index.html off the disk gives you
+ *    file://, where navigator.mediaDevices is undefined, so the call
+ *    failed with no permission prompt at all. getLocalStream() now
+ *    says so explicitly instead of throwing something cryptic.
+ *
+ * 2. Early ICE candidates. Candidates can arrive before the receiving
+ *    side has a peer connection (the callee is still "ringing"), or
+ *    before setRemoteDescription resolves. addIceCandidate() in that
+ *    window throws or silently no-ops, which made calls connect
+ *    inconsistently. They're buffered in pendingIce and flushed once a
+ *    remote description exists.
  */
 
-// NOTE: openrelay.metered.ca's free static-credential TURN server has been
-// reported unreliable lately (metered.ca has been pushing people toward an
-// API-key-based TURN endpoint instead - see metered.ca/tools/openrelay).
-// This matters specifically for the case you're hitting: calls between two
-// devices on *different* networks (e.g. phone on mobile data + laptop on
-// WiFi) almost always need a working TURN relay, not just STUN - STUN alone
-// only helps when a direct/NAT-punched connection is possible, which is
-// common on the same WiFi but unreliable across different networks/carriers.
-// If calls still fail after this, get a free API key at metered.ca (or
-// another TURN provider) and swap the two turn: entries below for the
-// credentials it gives you - that's the most likely remaining culprit.
-const ICE_SERVERS = {
-  iceServers: [
-    { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'stun:global.stun.twilio.com:3478' },
-    {
-      urls: 'turn:openrelay.metered.ca:80',
-      username: 'openrelayproject',
-      credential: 'openrelayproject',
-    },
-    {
-      urls: 'turn:openrelay.metered.ca:443',
-      username: 'openrelayproject',
-      credential: 'openrelayproject',
-    },
-    {
-      urls: 'turn:openrelay.metered.ca:443?transport=tcp',
-      username: 'openrelayproject',
-      credential: 'openrelayproject',
-    },
-  ],
-};
+const ICE_SERVERS = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 
-let pc = null;             // RTCPeerConnection for the active/pending call
+let pc = null;
 let localStream = null;
 let callPeerId = null;
 let callPeerName = null;
 let isVideoCall = false;
 let callState = 'idle';    // idle | calling | ringing | active
 let pendingOffer = null;
-let pendingIceCandidates = []; // candidates that arrived before we had a remote description
+let pendingIce = [];
 
 function $c(id) { return document.getElementById(id); }
 
@@ -80,7 +47,8 @@ function teardownCall() {
   callPeerId = null;
   callPeerName = null;
   callState = 'idle';
-  pendingIceCandidates = [];
+  pendingOffer = null;
+  pendingIce = [];
   resetCallUI();
 }
 
@@ -88,12 +56,39 @@ function sendSignal(obj) {
   ws.send(JSON.stringify(obj));
 }
 
-async function flushPendingIceCandidates() {
-  if (!pc) { pendingIceCandidates = []; return; }
-  const queued = pendingIceCandidates;
-  pendingIceCandidates = [];
+// returns a MediaStream or null (and has already alerted the user).
+async function getLocalStream(video) {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    alert(
+      'The browser will not give this page microphone/camera access.\n\n' +
+      'That API is only available on https:// or http://localhost, and this page is on ' +
+      location.protocol + '//' + (location.host || '(local file)') + '.\n\n' +
+      'Run `python serve.py` and open http://localhost:8000 instead of the file:// path.'
+    );
+    return null;
+  }
+  try {
+    return await navigator.mediaDevices.getUserMedia({ audio: true, video });
+  } catch (err) {
+    if (err.name === 'NotAllowedError') {
+      alert('Microphone/camera permission was denied. Click the camera icon in the address bar and allow it, then try again.');
+    } else if (err.name === 'NotFoundError') {
+      alert(video ? 'No camera found on this device.' : 'No microphone found on this device.');
+    } else if (err.name === 'NotReadableError') {
+      alert('The microphone/camera is already in use by another app or tab.');
+    } else {
+      alert('Could not access microphone/camera: ' + err.name + ' - ' + err.message);
+    }
+    return null;
+  }
+}
+
+function flushPendingIce() {
+  if (!pc || !pendingIce.length) return;
+  const queued = pendingIce;
+  pendingIce = [];
   for (const candidate of queued) {
-    try { await pc.addIceCandidate(candidate); } catch (e) { /* ignore stale/invalid candidates */ }
+    pc.addIceCandidate(candidate).catch(() => {});
   }
 }
 
@@ -108,6 +103,10 @@ function buildPeerConnection() {
     $c('remoteVideo').srcObject = e.streams[0];
   };
   conn.onconnectionstatechange = () => {
+    if (conn !== pc) return;
+    if (conn.connectionState === 'connected') {
+      $c('callStatusText').textContent = 'in call';
+    }
     if (['disconnected', 'failed', 'closed'].includes(conn.connectionState) && callState !== 'idle') {
       teardownCall();
     }
@@ -125,13 +124,8 @@ async function startCall(peerId, video) {
   isVideoCall = video;
   callState = 'calling';
 
-  try {
-    localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video });
-  } catch (err) {
-    alert('could not access microphone/camera: ' + err.message);
-    teardownCall();
-    return;
-  }
+  localStream = await getLocalStream(video);
+  if (!localStream) { teardownCall(); return; }
 
   pc = buildPeerConnection();
   localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
@@ -144,18 +138,17 @@ async function startCall(peerId, video) {
 }
 
 async function acceptCall() {
+  if (!pendingOffer) return;
   const { from, sdp, video } = pendingOffer;
+  pendingOffer = null;
   callPeerId = from;
   callPeerName = users[from] ? users[from].username : 'unknown';
   isVideoCall = video;
   callState = 'active';
   $c('incomingCallModal').classList.add('hidden');
-  pendingOffer = null;
 
-  try {
-    localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video });
-  } catch (err) {
-    alert('could not access microphone/camera: ' + err.message);
+  localStream = await getLocalStream(video);
+  if (!localStream) {
     sendSignal({ type: 'call_reject', to: from });
     teardownCall();
     return;
@@ -164,7 +157,7 @@ async function acceptCall() {
   pc = buildPeerConnection();
   localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
   await pc.setRemoteDescription({ type: 'offer', sdp });
-  await flushPendingIceCandidates();
+  flushPendingIce();
   const answer = await pc.createAnswer();
   await pc.setLocalDescription(answer);
   sendSignal({ type: 'call_answer', to: from, sdp: answer.sdp });
@@ -176,7 +169,8 @@ function rejectCall() {
   if (pendingOffer) sendSignal({ type: 'call_reject', to: pendingOffer.from });
   $c('incomingCallModal').classList.add('hidden');
   pendingOffer = null;
-  pendingIceCandidates = [];
+  pendingIce = [];
+  callState = 'idle';
 }
 
 function hangUp() {
@@ -201,7 +195,6 @@ function toggleCamera() {
 }
 
 function showCallOverlay(state, video) {
-  if (typeof closeSidebar === 'function') closeSidebar();
   $c('callOverlay').classList.remove('hidden');
   $c('callPeerName').textContent = callPeerName;
   $c('callStatusText').textContent = state === 'calling' ? 'calling...' : 'in call';
@@ -215,43 +208,37 @@ function handleCallSignal(data) {
   switch (data.type) {
     case 'call_offer': {
       if (callState !== 'idle') {
-        // busy - auto reject
-        sendSignal({ type: 'call_reject', to: data.from });
+        sendSignal({ type: 'call_reject', to: data.from });   // busy
         return;
       }
       pendingOffer = data;
-      pendingIceCandidates = [];
+      pendingIce = [];
       callState = 'ringing';
       const caller = users[data.from];
       $c('incomingCallerName').textContent = caller ? caller.username : 'unknown';
       $c('incomingCallType').textContent = data.video ? 'video call' : 'voice call';
-      if (typeof closeSidebar === 'function') closeSidebar();
       $c('incomingCallModal').classList.remove('hidden');
       break;
     }
     case 'call_answer': {
       if (pc && callPeerId === data.from) {
-        (async () => {
-          await pc.setRemoteDescription({ type: 'answer', sdp: data.sdp });
-          await flushPendingIceCandidates();
-          callState = 'active';
-          $c('callStatusText').textContent = 'in call';
-        })();
+        pc.setRemoteDescription({ type: 'answer', sdp: data.sdp })
+          .then(flushPendingIce)
+          .catch(() => {});
+        callState = 'active';
       }
       break;
     }
     case 'call_ice': {
       if (!data.candidate) break;
-      // is this candidate relevant to the call we're setting up / in?
-      const relevant = (callPeerId === data.from) || (pendingOffer && pendingOffer.from === data.from);
-      if (!relevant) break;
-
-      if (pc && pc.remoteDescription) {
+      const fromCurrentPeer = callPeerId === data.from || (pendingOffer && pendingOffer.from === data.from);
+      if (!fromCurrentPeer) break;
+      // might arrive while still ringing (no pc yet) or before the
+      // remote description lands - buffer instead of dropping
+      if (pc && pc.remoteDescription && pc.remoteDescription.type) {
         pc.addIceCandidate(data.candidate).catch(() => {});
       } else {
-        // remote description isn't set yet (still ringing, or the offer
-        // hasn't been processed) - hold onto it and apply it once it is
-        pendingIceCandidates.push(data.candidate);
+        pendingIce.push(data.candidate);
       }
       break;
     }
@@ -269,7 +256,7 @@ function handleCallSignal(data) {
       } else if (pendingOffer && pendingOffer.from === data.from) {
         $c('incomingCallModal').classList.add('hidden');
         pendingOffer = null;
-        pendingIceCandidates = [];
+        pendingIce = [];
         callState = 'idle';
       }
       break;
